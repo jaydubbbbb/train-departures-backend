@@ -18,11 +18,8 @@ CORS(app)
 LIVE_TIMES_URL = "https://www.transperth.wa.gov.au/Timetables/Live-Train-Times?station=Queens%20Park%20Stn"
 API_URL = "https://www.transperth.wa.gov.au/API/SilverRailRestService/SilverRailService/GetStopTimetable"
 
-# Queens Park Station stop codes
-STOP_CODES = {
-    'platform_1': '99091',  # Platform 1 (Perth-bound)
-    'platform_2': '99092'   # Platform 2 (South-bound)
-}
+# Queens Park Station ID
+STATION_ID = '133'
 
 # Cache for tokens (so we don't fetch page every time)
 token_cache = {
@@ -106,8 +103,8 @@ def calculate_minutes_until(depart_time_str):
     except:
         return None
 
-def fetch_departures_for_platform(stop_code):
-    """Fetch departures from Transperth API for a specific platform"""
+def fetch_all_departures():
+    """Fetch all departures for Queens Park Station"""
     try:
         # Get fresh tokens
         tokens = get_tokens()
@@ -116,10 +113,17 @@ def fetch_departures_for_platform(stop_code):
             print("No verification token available")
             return []
         
+        # Get current date/time
+        now = datetime.now()
+        search_date = now.strftime('%Y-%m-%d')
+        search_time = now.strftime('%H:%M')
+        
         # Prepare form data (application/x-www-form-urlencoded)
         form_data = {
-            'stopUid': f'PerthRestricted:{stop_code}',
-            'maxResults': '20'
+            'StationId': STATION_ID,
+            'SearchDate': search_date,
+            'SearchTime': search_time,
+            'IsRealTimeChecked': 'true'
         }
         
         headers = {
@@ -135,7 +139,7 @@ def fetch_departures_for_platform(stop_code):
             'Tabid': tokens['tab_id']
         }
         
-        print(f"Fetching from API for stop {stop_code}...")
+        print(f"Fetching from API for station {STATION_ID} at {search_time}...")
         response = requests.post(
             API_URL,
             data=urlencode(form_data),
@@ -161,7 +165,7 @@ def fetch_departures_for_platform(stop_code):
             return []
         
         trips = data.get('trips', [])
-        print(f"Found {len(trips)} trips for stop {stop_code}")
+        print(f"Found {len(trips)} trips for station {STATION_ID}")
         
         departures = []
         
@@ -226,6 +230,8 @@ def fetch_departures_for_platform(stop_code):
         
     except Exception as e:
         print(f"Error fetching from API: {e}")
+        import traceback
+        traceback.print_exc()
         return []
 
 @app.route('/api/departures', methods=['GET'])
@@ -235,15 +241,12 @@ def get_departures():
         print("=" * 50)
         print("Fetching departures from Transperth API...")
         
-        # Fetch from both platforms
-        platform_1_deps = fetch_departures_for_platform(STOP_CODES['platform_1'])
-        platform_2_deps = fetch_departures_for_platform(STOP_CODES['platform_2'])
+        # Fetch all departures in one call
+        all_deps = fetch_all_departures()
         
-        all_deps = platform_1_deps + platform_2_deps
         print(f"\nTotal departures: {len(all_deps)}")
         
-        # Separate by direction
-        # Platform 1 is Perth-bound, Platform 2 is South-bound (Cockburn/Byford)
+        # Separate by platform (1 = Perth, 2 = South)
         perth = [d for d in all_deps if d['platform'] == '1']
         south = [d for d in all_deps if d['platform'] == '2']
         
