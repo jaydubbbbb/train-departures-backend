@@ -96,59 +96,76 @@ def scrape_transperth(url, line_name):
         soup = BeautifulSoup(response.content, 'html.parser')
         departures = []
         
-        # Method 1: Look for table rows
-        departure_rows = soup.find_all('tr', class_=re.compile('departure|train|service|row'))
+        # Find the table with ID tblStationStatus
+        table = soup.find('table', id='tblStationStatus')
         
-        # Method 2: Look for divs if no table
-        if not departure_rows or len(departure_rows) < 2:
-            departure_rows = soup.find_all('div', class_=re.compile('departure|train|service|card'))
+        if not table:
+            print(f"Could not find tblStationStatus table for {line_name}")
+            return []
         
-        # Method 3: Look for list items
-        if not departure_rows or len(departure_rows) < 2:
-            departure_rows = soup.find_all('li', class_=re.compile('departure|train|service'))
+        # Find the tbody
+        tbody = table.find('tbody')
+        if not tbody:
+            print(f"Could not find tbody in table for {line_name}")
+            return []
         
-        print(f"Found {len(departure_rows)} potential departure rows for {line_name}")
+        # Get all rows
+        rows = tbody.find_all('tr')
+        print(f"Found {len(rows)} departure rows for {line_name}")
         
-        for row in departure_rows:
+        for row in rows:
             try:
-                # Try multiple selector patterns
-                platform = (row.find(class_=re.compile('platform|plat', re.I)) or 
-                           row.find(string=re.compile('Platform', re.I)))
-                destination = (row.find(class_=re.compile('destination|dest|train', re.I)) or
-                              row.find('strong') or row.find('b'))
-                time = (row.find(class_=re.compile('time|depart|due|minute', re.I)) or
-                       row.find(string=re.compile(r'\d+\s*min|\d+:\d+|now|due', re.I)))
+                # Get all td elements
+                tds = row.find_all('td')
                 
-                if destination and time:
-                    # Extract text
-                    if isinstance(platform, str):
-                        platform_text = platform
-                    else:
-                        platform_text = platform.get_text(strip=True) if platform else '?'
+                if len(tds) < 3:
+                    continue
+                
+                # First td contains time (with footable-first-column class)
+                time_td = tds[0]
+                time_span = time_td.find('span', class_='footable-toggle')
+                if time_span:
+                    time_text = time_span.get_text(strip=True)
+                else:
+                    time_text = time_td.get_text(strip=True).split('\n')[0].strip()
+                
+                # Second td contains destination
+                dest_td = tds[1]
+                destination_text = dest_td.get_text(strip=True)
+                
+                # Third td contains platform info
+                platform_td = tds[2]
+                platform_spans = platform_td.find_all('span', style=re.compile('display:inline-block'))
+                
+                platform_text = '?'
+                stops_text = 'All Stations'
+                
+                if platform_spans and len(platform_spans) > 0:
+                    # First span usually has "from platform X"
+                    platform_info = platform_spans[0].get_text(strip=True)
+                    platform_match = re.search(r'platform\s+(\d+)', platform_info, re.I)
+                    if platform_match:
+                        platform_text = platform_match.group(1)
                     
-                    if isinstance(destination, str):
-                        destination_text = destination
-                    else:
-                        destination_text = destination.get_text(strip=True)
+                    # Additional spans may have stops info
+                    if len(platform_spans) > 1:
+                        stops_text = platform_spans[1].get_text(strip=True)
+                
+                # Parse time
+                minutes = parse_departure_time(time_text)
+                
+                if minutes is not None and destination_text:
+                    departures.append({
+                        'platform': platform_text,
+                        'destination': destination_text,
+                        'time_display': time_text,
+                        'minutes': minutes,
+                        'pattern': 'W',
+                        'stops': stops_text,
+                        'line': line_name
+                    })
+                    print(f"Parsed: {destination_text} from platform {platform_text} in {minutes} min ({time_text})")
                     
-                    if isinstance(time, str):
-                        time_text = time
-                    else:
-                        time_text = time.get_text(strip=True)
-                    
-                    minutes = parse_departure_time(time_text)
-                    
-                    if minutes is not None and destination_text:
-                        departures.append({
-                            'platform': platform_text,
-                            'destination': destination_text,
-                            'time_display': time_text,
-                            'minutes': minutes,
-                            'pattern': 'W',
-                            'stops': 'All Stations',
-                            'line': line_name
-                        })
-                        print(f"Parsed: {destination_text} in {minutes} min")
             except Exception as e:
                 print(f"Error parsing row: {e}")
                 continue
