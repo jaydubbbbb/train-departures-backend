@@ -20,11 +20,8 @@ import os
 app = Flask(__name__)
 CORS(app)
 
-# Transperth URLs
-URLS = {
-    'armadale': 'https://www.transperth.wa.gov.au/Timetables/Live-Train-Times?line=Armadale%20Line&station=Queens%20Park%20Stn',
-    'thornlie': 'https://www.transperth.wa.gov.au/Timetables/Live-Train-Times?line=Thornlie-Cockburn%20Line&station=Queens%20Park%20Stn'
-}
+# Transperth URL - Single URL shows both lines
+STATION_URL = 'https://www.transperth.wa.gov.au/Timetables/Live-Train-Times?station=Queens%20Park%20Stn'
 
 # ScraperAPI configuration (optional but recommended)
 SCRAPER_API_KEY = os.environ.get('SCRAPER_API_KEY', '')  # Set this in Render environment variables
@@ -60,7 +57,7 @@ def scrape_with_proxy(url):
     """Fetch URL using ScraperAPI proxy"""
     if SCRAPER_API_KEY:
         proxy_url = f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}&url={url}&render=true"
-        response = requests.get(proxy_url, timeout=30)
+        response = requests.get(proxy_url, timeout=90)
         return response
     return None
 
@@ -82,16 +79,38 @@ def scrape_direct(url):
 
 def scrape_transperth(url, line_name):
     """Scrape departure information from Transperth website"""
+    max_retries = 2
+    
+    for attempt in range(max_retries):
+        try:
+            # Try proxy first if available
+            if SCRAPER_API_KEY:
+                print(f"Using ScraperAPI proxy for {line_name} (attempt {attempt + 1}/{max_retries})")
+                response = scrape_with_proxy(url)
+            else:
+                print(f"Direct fetch for {line_name}")
+                response = scrape_direct(url)
+            
+            if response:
+                response.raise_for_status()
+                break  # Success, exit retry loop
+            
+        except requests.exceptions.Timeout:
+            print(f"Timeout on attempt {attempt + 1} for {line_name}")
+            if attempt < max_retries - 1:
+                print(f"Retrying...")
+                continue
+            else:
+                print(f"Max retries reached for {line_name}")
+                return []
+        except Exception as e:
+            print(f"Error on attempt {attempt + 1} for {line_name}: {e}")
+            if attempt < max_retries - 1:
+                continue
+            else:
+                return []
+    
     try:
-        # Try proxy first if available
-        if SCRAPER_API_KEY:
-            print(f"Using ScraperAPI proxy for {line_name}")
-            response = scrape_with_proxy(url)
-        else:
-            print(f"Direct fetch for {line_name}")
-            response = scrape_direct(url)
-        
-        response.raise_for_status()
         
         soup = BeautifulSoup(response.content, 'html.parser')
         departures = []
@@ -183,14 +202,14 @@ def scrape_transperth(url, line_name):
 def get_departures():
     """API endpoint to get all departures"""
     try:
-        print("Fetching departures...")
-        armadale_departures = scrape_transperth(URLS['armadale'], 'Armadale')
-        thornlie_departures = scrape_transperth(URLS['thornlie'], 'Thornlie-Cockburn')
+        print("Fetching departures from Queens Park Station...")
         
-        all_departures = armadale_departures + thornlie_departures
+        # Fetch all departures from single URL
+        all_departures = scrape_transperth(STATION_URL, 'Queens Park')
+        
         print(f"Total departures found: {len(all_departures)}")
         
-        # Separate by direction
+        # Separate by direction based on destination
         perth_departures = [
             d for d in all_departures 
             if 'perth' in d['destination'].lower()
@@ -198,7 +217,7 @@ def get_departures():
         
         south_departures = [
             d for d in all_departures 
-            if d not in perth_departures
+            if 'perth' not in d['destination'].lower()
         ]
         
         perth_departures.sort(key=lambda x: x['minutes'])
