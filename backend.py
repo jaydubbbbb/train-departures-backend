@@ -1,157 +1,149 @@
 """
-Queens Park Station Departure Scraper - SIMPLE VERSION
-Works with ScraperAPI with graceful fallback
+Queens Park Station Departure Scraper - FINAL VERSION
+Calls Transperth's official API directly - FREE and RELIABLE!
 """
 
 from flask import Flask, jsonify
 from flask_cors import CORS
 import requests
-from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
+from datetime import datetime
 import re
-import os
 
 app = Flask(__name__)
 CORS(app)
 
-# Configuration
-STATION_URL = 'https://www.transperth.wa.gov.au/Timetables/Live-Train-Times?station=Queens%20Park%20Stn'
-SCRAPER_API_KEY = os.environ.get('SCRAPER_API_KEY', '')
-TIMEOUT = 60  # Shorter timeout
+# Transperth's official API endpoint
+API_URL = "https://www.transperth.wa.gov.au/API/SilverRailRestService/SilverRailService/GetStopTimetable"
 
-def parse_time_to_minutes(time_str):
-    """Convert time string to minutes from now"""
-    if not time_str:
-        return None
-    
-    time_str = time_str.strip().lower()
-    
-    if 'now' in time_str or 'due' in time_str:
-        return 0
-    
-    # Look for "X min" format
-    match = re.search(r'(\d+)\s*min', time_str)
-    if match:
-        return int(match.group(1))
-    
-    # Look for time format like "19:34"
-    match = re.search(r'(\d{1,2}):(\d{2})', time_str)
-    if match:
-        hour = int(match.group(1))
-        minute = int(match.group(2))
-        
-        now = datetime.now()
-        departure = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        
-        if departure < now:
-            departure += timedelta(days=1)
-        
-        return int((departure - now).total_seconds() / 60)
-    
-    return None
+# Queens Park Station stop codes
+STOP_CODES = {
+    'platform_1': '99091',  # Platform 1 (Perth-bound)
+    'platform_2': '99092'   # Platform 2 (South-bound)
+}
 
-def scrape_transperth_simple():
-    """Simple scraping with minimal parameters"""
+def calculate_minutes_until(depart_time_str):
+    """Calculate minutes until departure from ISO format time"""
     try:
-        if not SCRAPER_API_KEY:
-            print("No ScraperAPI key - returning empty")
-            return []
+        depart_time = datetime.fromisoformat(depart_time_str)
+        now = datetime.now()
+        diff = (depart_time - now).total_seconds() / 60
+        return max(0, int(diff))
+    except:
+        return None
+
+def fetch_departures_for_platform(stop_code):
+    """Fetch departures from Transperth API for a specific platform"""
+    try:
+        params = {
+            'stopUid': f'PerthRestricted:{stop_code}',
+            'maxResults': '20'
+        }
         
-        # Simpler API call - just render, no wait
-        api_url = f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}&url={STATION_URL}&render=true"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+            'Referer': 'https://www.transperth.wa.gov.au/'
+        }
         
-        print(f"Fetching via ScraperAPI...")
-        response = requests.get(api_url, timeout=TIMEOUT)
+        print(f"Fetching from API for stop {stop_code}...")
+        response = requests.get(API_URL, params=params, headers=headers, timeout=10)
         
         if response.status_code != 200:
-            print(f"ScraperAPI returned status {response.status_code}")
+            print(f"API returned status {response.status_code}")
             return []
         
-        print("Parsing HTML...")
-        soup = BeautifulSoup(response.content, 'html.parser')
+        data = response.json()
         
-        # Find table
-        table = soup.find('table', id='tblStationStatus')
-        if not table:
-            print("Table not found")
+        if data.get('result') != 'success':
+            print(f"API result not success: {data.get('result')}")
             return []
         
-        tbody = table.find('tbody')
-        if not tbody:
-            print("tbody not found")
-            return []
-        
-        rows = tbody.find_all('tr')
-        print(f"Found {len(rows)} rows")
+        trips = data.get('trips', [])
+        print(f"Found {len(trips)} trips for stop {stop_code}")
         
         departures = []
         
-        for idx, row in enumerate(rows):
+        for trip in trips:
             try:
-                cells = row.find_all('td')
-                if len(cells) < 2:
+                # Extract platform number from stop name
+                stop_name = trip.get('StopTimetableStop', {}).get('Name', '')
+                platform_match = re.search(r'Platform\s+(\d+)', stop_name)
+                platform = platform_match.group(1) if platform_match else '?'
+                
+                # Get destination
+                summary = trip.get('Summary', {})
+                headsign = summary.get('Headsign', '')
+                
+                # Get display info
+                display_title = trip.get('DisplayTripTitle', '')
+                display_description = trip.get('DisplayTripDescription', '')
+                display_status = trip.get('DisplayTripStatus', '')
+                countdown = trip.get('DisplayTripStatusCountDown', '')
+                
+                # Get route info
+                route_name = summary.get('RouteName', '')
+                display_route_code = trip.get('DisplayRouteCode', '')
+                
+                # Get real-time info
+                real_time = trip.get('RealTimeInfo', {})
+                series = summary.get('RealTimeInfo', {}).get('Series', 'W')
+                num_cars = summary.get('RealTimeInfo', {}).get('NumCars', '')
+                
+                # Calculate minutes
+                depart_time = trip.get('DepartTime', '')
+                minutes = calculate_minutes_until(depart_time)
+                
+                if minutes is None:
                     continue
                 
-                # Get time from first cell
-                time_text = cells[0].get_text(strip=True, separator=' ').split()[0] if cells[0].get_text(strip=True) else ''
+                # Build stops description
+                stops = f"All Stations"
+                if num_cars:
+                    stops = f"{stops} ({num_cars} cars)"
+                if series:
+                    stops = f"{stops} - {series} series"
                 
-                # Get destination from second cell
-                dest_text = cells[1].get_text(strip=True)
+                departures.append({
+                    'platform': platform,
+                    'destination': display_title or headsign,
+                    'time_display': countdown or display_status,
+                    'minutes': minutes,
+                    'pattern': series or 'W',
+                    'stops': stops,
+                    'route': route_name,
+                    'route_code': display_route_code
+                })
                 
-                # Get platform from third cell
-                platform = '?'
-                if len(cells) >= 3:
-                    platform_text = cells[2].get_text(strip=True)
-                    match = re.search(r'platform\s+(\d+)', platform_text, re.I)
-                    if match:
-                        platform = match.group(1)
+                print(f"  ✓ {display_title or headsign} in {minutes} min from platform {platform}")
                 
-                # Skip if empty
-                if not dest_text:
-                    continue
-                
-                # If no time, skip (JavaScript didn't load)
-                if not time_text:
-                    print(f"Row {idx}: No time for {dest_text}")
-                    continue
-                
-                minutes = parse_time_to_minutes(time_text)
-                
-                if minutes is not None:
-                    departures.append({
-                        'platform': platform,
-                        'destination': dest_text,
-                        'time_display': time_text,
-                        'minutes': minutes,
-                        'pattern': 'W',
-                        'stops': 'All Stations'
-                    })
-                    print(f"✓ {dest_text} in {minutes} min from platform {platform}")
-            
             except Exception as e:
-                print(f"Error parsing row {idx}: {e}")
+                print(f"Error parsing trip: {e}")
                 continue
         
         return departures
-    
-    except requests.Timeout:
-        print("Request timed out")
-        return []
+        
     except Exception as e:
-        print(f"Error scraping: {e}")
+        print(f"Error fetching from API: {e}")
         return []
 
 @app.route('/api/departures', methods=['GET'])
 def get_departures():
-    """Get all departures"""
+    """Get all departures for Queens Park Station"""
     try:
         print("=" * 50)
-        all_deps = scrape_transperth_simple()
-        print(f"Total found: {len(all_deps)}")
+        print("Fetching departures from Transperth API...")
+        
+        # Fetch from both platforms
+        platform_1_deps = fetch_departures_for_platform(STOP_CODES['platform_1'])
+        platform_2_deps = fetch_departures_for_platform(STOP_CODES['platform_2'])
+        
+        all_deps = platform_1_deps + platform_2_deps
+        print(f"\nTotal departures: {len(all_deps)}")
         
         # Separate by direction
-        perth = [d for d in all_deps if 'perth' in d['destination'].lower()]
-        south = [d for d in all_deps if 'perth' not in d['destination'].lower()]
+        # Platform 1 is Perth-bound, Platform 2 is South-bound (Cockburn/Byford)
+        perth = [d for d in all_deps if d['platform'] == '1']
+        south = [d for d in all_deps if d['platform'] == '2']
         
         perth.sort(key=lambda x: x['minutes'])
         south.sort(key=lambda x: x['minutes'])
@@ -160,12 +152,13 @@ def get_departures():
             'success': True,
             'perth': perth[:10],
             'south': south[:10],
-            'last_updated': datetime.now().isoformat(),
-            'using_proxy': bool(SCRAPER_API_KEY)
+            'last_updated': datetime.now().isoformat()
         })
-    
+        
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error in get_departures: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'success': False,
             'error': str(e)
@@ -176,35 +169,31 @@ def health_check():
     """Health check"""
     return jsonify({
         'status': 'healthy',
-        'timestamp': datetime.now().isoformat(),
-        'has_api_key': bool(SCRAPER_API_KEY)
+        'timestamp': datetime.now().isoformat()
     })
 
 @app.route('/')
 def index():
     """Info page"""
-    status = "✅ API key configured" if SCRAPER_API_KEY else "❌ No API key"
-    return f'''
+    return '''
     <html>
         <head><title>Queens Park Station API</title></head>
         <body style="font-family: Arial; padding: 40px; max-width: 600px; margin: 0 auto;">
             <h1>🚆 Queens Park Station API</h1>
-            <p><strong>Status:</strong> {status}</p>
+            <p><strong>Status:</strong> Running (using Transperth's official API)</p>
+            <p><strong>Free:</strong> No API keys or external services needed!</p>
             <h2>Endpoints:</h2>
             <ul>
-                <li><a href="/api/health">/api/health</a></li>
-                <li><a href="/api/departures">/api/departures</a></li>
+                <li><a href="/api/health">/api/health</a> - Health check</li>
+                <li><a href="/api/departures">/api/departures</a> - Get live departures</li>
             </ul>
         </body>
     </html>
     '''
 
 if __name__ == '__main__':
-    print("🚆 Queens Park Station API")
+    print("🚆 Queens Park Station API - FREE VERSION")
     print("=" * 50)
-    if SCRAPER_API_KEY:
-        print("✅ ScraperAPI configured")
-    else:
-        print("⚠️ Set SCRAPER_API_KEY environment variable")
+    print("Using Transperth's official API - completely free!")
     print("=" * 50)
     app.run(debug=True, host='0.0.0.0', port=5000)
