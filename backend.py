@@ -6,13 +6,16 @@ Calls Transperth's official API directly - FREE and RELIABLE!
 from flask import Flask, jsonify
 from flask_cors import CORS
 import requests
+from bs4 import BeautifulSoup
 from datetime import datetime
 import re
+from urllib.parse import urlencode
 
 app = Flask(__name__)
 CORS(app)
 
-# Transperth's official API endpoint
+# Transperth URLs
+LIVE_TIMES_URL = "https://www.transperth.wa.gov.au/Timetables/Live-Train-Times?station=Queens%20Park%20Stn"
 API_URL = "https://www.transperth.wa.gov.au/API/SilverRailRestService/SilverRailService/GetStopTimetable"
 
 # Queens Park Station stop codes
@@ -20,6 +23,78 @@ STOP_CODES = {
     'platform_1': '99091',  # Platform 1 (Perth-bound)
     'platform_2': '99092'   # Platform 2 (South-bound)
 }
+
+# Cache for tokens (so we don't fetch page every time)
+token_cache = {
+    'verification_token': None,
+    'module_id': None,
+    'tab_id': None,
+    'cookies': None,
+    'timestamp': None
+}
+
+def fetch_page_tokens():
+    """Fetch the verification token and other required values from the page"""
+    try:
+        print("Fetching page tokens...")
+        session = requests.Session()
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        }
+        
+        response = session.get(LIVE_TIMES_URL, headers=headers, timeout=10)
+        
+        if response.status_code != 200:
+            print(f"Failed to fetch page: {response.status_code}")
+            return None
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Find RequestVerificationToken (usually in a hidden input or meta tag)
+        token_input = soup.find('input', {'name': '__RequestVerificationToken'})
+        if token_input:
+            verification_token = token_input.get('value')
+        else:
+            # Try meta tag
+            token_meta = soup.find('meta', {'name': '__RequestVerificationToken'})
+            verification_token = token_meta.get('content') if token_meta else None
+        
+        # Find ModuleId and TabId (often in script or data attributes)
+        module_id = '5111'  # From your headers
+        tab_id = '248'      # From your headers
+        
+        if verification_token:
+            print(f"✓ Got verification token: {verification_token[:20]}...")
+            return {
+                'verification_token': verification_token,
+                'module_id': module_id,
+                'tab_id': tab_id,
+                'cookies': session.cookies,
+                'timestamp': datetime.now()
+            }
+        else:
+            print("✗ Could not find verification token")
+            return None
+            
+    except Exception as e:
+        print(f"Error fetching tokens: {e}")
+        return None
+
+def get_tokens():
+    """Get tokens from cache or fetch new ones"""
+    # Check if cache is fresh (less than 5 minutes old)
+    if token_cache['timestamp']:
+        age = (datetime.now() - token_cache['timestamp']).total_seconds()
+        if age < 300:  # 5 minutes
+            return token_cache
+    
+    # Fetch new tokens
+    tokens = fetch_page_tokens()
+    if tokens:
+        token_cache.update(tokens)
+    
+    return token_cache
 
 def calculate_minutes_until(depart_time_str):
     """Calculate minutes until departure from ISO format time"""
@@ -34,21 +109,40 @@ def calculate_minutes_until(depart_time_str):
 def fetch_departures_for_platform(stop_code):
     """Fetch departures from Transperth API for a specific platform"""
     try:
-        # API expects POST with JSON body
-        payload = {
+        # Get fresh tokens
+        tokens = get_tokens()
+        
+        if not tokens.get('verification_token'):
+            print("No verification token available")
+            return []
+        
+        # Prepare form data (application/x-www-form-urlencoded)
+        form_data = {
             'stopUid': f'PerthRestricted:{stop_code}',
-            'maxResults': 20
+            'maxResults': '20'
         }
         
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'Referer': 'https://www.transperth.wa.gov.au/'
+            'Accept': '*/*',
+            'Accept-Language': 'en,zh-CN;q=0.9,zh;q=0.8',
+            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+            'Origin': 'https://www.transperth.wa.gov.au',
+            'Referer': LIVE_TIMES_URL,
+            'X-Requested-With': 'XMLHttpRequest',
+            'Requestverificationtoken': tokens['verification_token'],
+            'Moduleid': tokens['module_id'],
+            'Tabid': tokens['tab_id']
         }
         
         print(f"Fetching from API for stop {stop_code}...")
-        response = requests.post(API_URL, json=payload, headers=headers, timeout=10)
+        response = requests.post(
+            API_URL,
+            data=urlencode(form_data),
+            headers=headers,
+            cookies=tokens.get('cookies'),
+            timeout=10
+        )
         
         if response.status_code != 200:
             print(f"API returned status {response.status_code}")
