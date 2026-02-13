@@ -34,19 +34,21 @@ def calculate_minutes_until(depart_time_str):
 def fetch_departures_for_platform(stop_code):
     """Fetch departures from Transperth API for a specific platform"""
     try:
-        params = {
+        # API expects POST with JSON body
+        payload = {
             'stopUid': f'PerthRestricted:{stop_code}',
-            'maxResults': '20'
+            'maxResults': 20
         }
         
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'application/json',
+            'Content-Type': 'application/json',
             'Referer': 'https://www.transperth.wa.gov.au/'
         }
         
         print(f"Fetching from API for stop {stop_code}...")
-        response = requests.get(API_URL, params=params, headers=headers, timeout=10)
+        response = requests.post(API_URL, json=payload, headers=headers, timeout=10)
         
         if response.status_code != 200:
             print(f"API returned status {response.status_code}")
