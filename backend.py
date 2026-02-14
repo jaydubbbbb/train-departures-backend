@@ -209,8 +209,10 @@ def fetch_all_departures(station_id='133'):
                 
                 # Get real-time info
                 real_time = trip.get('RealTimeInfo', {})
-                series = summary.get('RealTimeInfo', {}).get('Series', 'W')
-                num_cars = summary.get('RealTimeInfo', {}).get('NumCars', '')
+                real_time_info = summary.get('RealTimeInfo', {})
+                series = real_time_info.get('Series', 'W')
+                num_cars = real_time_info.get('NumCars', '')
+                fleet_number = real_time_info.get('FleetNumber', '')
                 
                 # Calculate minutes
                 depart_time = trip.get('DepartTime', '')
@@ -235,10 +237,11 @@ def fetch_all_departures(station_id='133'):
                     'stops': stops,
                     'route': route_name,
                     'route_code': display_route_code,
-                    'direction': direction
+                    'direction': direction,
+                    'fleetNumber': fleet_number
                 })
                 
-                print(f"  ✓ {display_title or headsign} in {minutes} min from platform {platform} (dir: {direction})")
+                print(f"  ✓ {display_title or headsign} in {minutes} min from platform {platform} (dir: {direction}, fleet: {fleet_number})")
                 
             except Exception as e:
                 print(f"Error parsing trip: {e}")
