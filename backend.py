@@ -195,6 +195,7 @@ def fetch_all_departures(station_id='133'):
                 # Get destination
                 summary = trip.get('Summary', {})
                 headsign = summary.get('Headsign', '')
+                direction = summary.get('Direction', '0')  # 0 = To Perth, 1 = From Perth
                 
                 # Get display info
                 display_title = trip.get('DisplayTripTitle', '')
@@ -233,10 +234,11 @@ def fetch_all_departures(station_id='133'):
                     'pattern': series or 'W',
                     'stops': stops,
                     'route': route_name,
-                    'route_code': display_route_code
+                    'route_code': display_route_code,
+                    'direction': direction
                 })
                 
-                print(f"  ✓ {display_title or headsign} in {minutes} min from platform {platform}")
+                print(f"  ✓ {display_title or headsign} in {minutes} min from platform {platform} (dir: {direction})")
                 
             except Exception as e:
                 print(f"Error parsing trip: {e}")
@@ -265,9 +267,9 @@ def get_departures():
         
         print(f"\nTotal departures: {len(all_deps)}")
         
-        # Separate by platform (1 = Perth/Northbound, 2 = South/other direction)
-        perth = [d for d in all_deps if d['platform'] == '1']
-        south = [d for d in all_deps if d['platform'] == '2']
+        # Separate by direction (0 = To Perth, 1 = From Perth)
+        perth = [d for d in all_deps if d.get('direction') == '0']
+        south = [d for d in all_deps if d.get('direction') == '1']
         
         perth.sort(key=lambda x: x['minutes'])
         south.sort(key=lambda x: x['minutes'])
