@@ -3,7 +3,7 @@ Queens Park Station Departure Scraper - FINAL VERSION
 Calls Transperth's official API directly - FREE and RELIABLE!
 """
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 import requests
 from bs4 import BeautifulSoup
@@ -24,11 +24,8 @@ except ImportError:
     PERTH_TZ = timezone(timedelta(hours=8))
 
 # Transperth URLs
-LIVE_TIMES_URL = "https://www.transperth.wa.gov.au/Timetables/Live-Train-Times?station=Queens%20Park%20Stn"
+LIVE_TIMES_URL = "https://www.transperth.wa.gov.au/Timetables/Live-Train-Times"
 API_URL = "https://www.transperth.wa.gov.au/API/SilverRailRestService/SilverRailService/GetStopTimetable"
-
-# Queens Park Station ID
-STATION_ID = '133'
 
 # Cache for tokens (so we don't fetch page every time)
 token_cache = {
@@ -122,8 +119,8 @@ def calculate_minutes_until(depart_time_str):
         print(f"Error calculating time: {e}")
         return None
 
-def fetch_all_departures():
-    """Fetch all departures for Queens Park Station"""
+def fetch_all_departures(station_id='133'):
+    """Fetch all departures for specified station"""
     try:
         # Get fresh tokens
         tokens = get_tokens()
@@ -139,7 +136,7 @@ def fetch_all_departures():
         
         # Prepare form data (application/x-www-form-urlencoded)
         form_data = {
-            'StationId': STATION_ID,
+            'StationId': station_id,
             'SearchDate': search_date,
             'SearchTime': search_time,
             'IsRealTimeChecked': 'true'
@@ -158,7 +155,7 @@ def fetch_all_departures():
             'Tabid': tokens['tab_id']
         }
         
-        print(f"Fetching from API for station {STATION_ID} at {search_time}...")
+        print(f"Fetching from API for station {station_id} at {search_time}...")
         response = requests.post(
             API_URL,
             data=urlencode(form_data),
@@ -184,7 +181,7 @@ def fetch_all_departures():
             return []
         
         trips = data.get('trips', [])
-        print(f"Found {len(trips)} trips for station {STATION_ID}")
+        print(f"Found {len(trips)} trips for station {station_id}")
         
         departures = []
         
@@ -255,17 +252,20 @@ def fetch_all_departures():
 
 @app.route('/api/departures', methods=['GET'])
 def get_departures():
-    """Get all departures for Queens Park Station"""
+    """Get all departures for specified station"""
     try:
+        # Get station_id from query parameter, default to Queens Park
+        station_id = request.args.get('station_id', '133')
+        
         print("=" * 50)
-        print("Fetching departures from Transperth API...")
+        print(f"Fetching departures for station {station_id}...")
         
         # Fetch all departures in one call
-        all_deps = fetch_all_departures()
+        all_deps = fetch_all_departures(station_id)
         
         print(f"\nTotal departures: {len(all_deps)}")
         
-        # Separate by platform (1 = Perth, 2 = South)
+        # Separate by platform (1 = Perth/Northbound, 2 = South/other direction)
         perth = [d for d in all_deps if d['platform'] == '1']
         south = [d for d in all_deps if d['platform'] == '2']
         
@@ -276,6 +276,7 @@ def get_departures():
             'success': True,
             'perth': perth[:10],
             'south': south[:10],
+            'station_id': station_id,
             'last_updated': datetime.now().isoformat()
         })
         
