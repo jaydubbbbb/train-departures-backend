@@ -212,8 +212,23 @@ def fetch_all_departures(station_id='133'):
                 series = summary.get('RealTimeInfo', {}).get('Series', 'W')
                 num_cars = summary.get('RealTimeInfo', {}).get('NumCars', '')
                 
-                # Calculate minutes
-                depart_time = trip.get('DepartTime', '')
+                # Get scheduled and estimated times
+                scheduled_time = trip.get('DepartTime', '')
+                estimated_time = real_time.get('EstimatedDepartureTime', '')
+                
+                # Use estimated time if available, otherwise use scheduled
+                # Convert estimated time format (HH:MM:SS) to full ISO format if needed
+                if estimated_time:
+                    # If estimated time is just time (no date), add the date from scheduled time
+                    if 'T' not in estimated_time:
+                        date_part = scheduled_time.split('T')[0] if 'T' in scheduled_time else datetime.now().strftime('%Y-%m-%d')
+                        depart_time = f"{date_part}T{estimated_time}"
+                    else:
+                        depart_time = estimated_time
+                else:
+                    depart_time = scheduled_time
+                
+                # Calculate minutes until departure (using estimated or scheduled)
                 minutes = calculate_minutes_until(depart_time)
                 
                 if minutes is None:
@@ -225,6 +240,9 @@ def fetch_all_departures(station_id='133'):
                     stops = f"{stops} ({num_cars} cars)"
                 if series:
                     stops = f"{stops} - {series} series"
+                
+                # Get delay/status information for logging
+                delay_status = trip.get('RealTimeStopStatusDetail', '')
                 
                 departures.append({
                     'platform': platform,
@@ -238,7 +256,8 @@ def fetch_all_departures(station_id='133'):
                     'direction': direction
                 })
                 
-                print(f"  ✓ {display_title or headsign} in {minutes} min from platform {platform} (dir: {direction})")
+                delay_info = f" ({delay_status})" if delay_status else ""
+                print(f"  ✓ {display_title or headsign} in {minutes} min from platform {platform}{delay_info}")
                 
             except Exception as e:
                 print(f"Error parsing trip: {e}")
