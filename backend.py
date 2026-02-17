@@ -43,7 +43,7 @@ departure_cache = {
     'timestamp': None,
     'station_id': None
 }
-CACHE_DURATION = 20  # Cache departures for 20 seconds
+CACHE_DURATION = 30  # Cache departures for 30 seconds
 
 def fetch_page_tokens():
     """Fetch the verification token and other required values from the page"""
